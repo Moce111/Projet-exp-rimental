@@ -52,7 +52,7 @@ function score(key, same) { const answered = !!key; return { response_key: key |
 async function runPairPhase(name, trials, duration, timeout) {
   stats[name] = { total: trials.length, answered: 0, correct: 0 };
   for (let i = 0; i < trials.length; i++) {
-    screen.querySelector(".progress").textContent = `${name} — essai ${i + 1}/${trials.length}`;
+    progress(`${name} — essai ${i + 1}/${trials.length}`);
     const t = trials[i], r = await pairTrial(t.f1, t.f2, duration, [sameKey, diffKey], timeout), s = score(r.key, t.same);
     stats[name].answered += r.key ? 1 : 0; stats[name].correct += s.correct === 1 ? 1 : 0;
     logRow({ phase: name, trial: i + 1, stim1: t.l1 || "", stim2: t.l2 || "", f1: t.f1, f2: t.f2, semitones: t.semis ?? -1, degree: t.degree ?? -1, pair_type: t.same ? "same" : (t.pairType || "diff"), ...s, rt_ms: r.rt, rating_1to5: -1 });
