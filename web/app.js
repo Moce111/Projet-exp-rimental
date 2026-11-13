@@ -200,6 +200,57 @@ async function runPairPhase(name, label, trials, duration, timeout) {
 }
 
 // ---------------------------------------------------------------------------
+// Scores affichés en fin d'expérience
+// ---------------------------------------------------------------------------
+function computeScores() {
+  const phase = name => rows.filter(r => r.phase === name);
+  const pct = (ok, n) => n ? Math.round(100 * ok / n) : 0;
+
+  // Expériences 1 et 2 : réponses correctes (une absence de réponse compte comme une erreur).
+  const e1 = phase("exp1_discrimination"), e2 = phase("exp2_discrimination");
+  const ok1 = e1.filter(r => r.correct === 1).length, ok2 = e2.filter(r => r.correct === 1).length;
+
+  // Identification : le son est-il attribué à la note dont il est le plus proche ?
+  // Sons 1 à 4 -> note grave, sons 6 à 9 -> note aiguë ; le son 5, au milieu, n'est pas compté.
+  const id = phase("exp2_identification").filter(r => r.stim1 !== 5);
+  const okId = id.filter(r => r.response === (r.stim1 < 5 ? lowLabel : highLabel)).length;
+
+  // Distance : cohérence entre l'écart réel (en demi-tons) et la note donnée (1 à 5).
+  // Pour chaque paire d'essais d'écarts différents : 1 point si le plus grand écart a reçu
+  // la note la plus élevée, ½ point en cas d'égalité, 0 sinon. Répondre au hasard donne ~50 %.
+  const d = phase("exp3_distance");
+  let pts = 0, pairs = 0;
+  for (let i = 0; i < d.length; i++) for (let j = i + 1; j < d.length; j++) {
+    if (d[i].semitones === d[j].semitones) continue;
+    const [small, big] = d[i].semitones < d[j].semitones ? [d[i], d[j]] : [d[j], d[i]];
+    pairs++; pts += big.rating_1to5 > small.rating_1to5 ? 1 : big.rating_1to5 === small.rating_1to5 ? .5 : 0;
+  }
+
+  return [
+    { id: "exp1", label: "Expérience 1 : notes identiques ou différentes", value: pct(ok1, e1.length), detail: `${ok1} bonnes réponses sur ${e1.length}` },
+    { id: "exp2", label: "Expérience 2 : sons proches", value: pct(ok2, e2.length), detail: `${ok2} bonnes réponses sur ${e2.length}` },
+    { id: "identification", label: "Identification des notes", value: pct(okId, id.length), detail: `${okId} sons sur ${id.length} attribués à la note la plus proche` },
+    { id: "exp3", label: "Expérience 3 : distance entre les notes", value: pct(pts, pairs), detail: "Cohérence entre vos notes et les écarts réels (50 % = hasard)" }
+  ];
+}
+
+function showResults(scores) {
+  view({ title: "Merci pour votre participation !", text: "Vos réponses ont été enregistrées. Voici vos résultats :" });
+  screenEl.querySelectorAll(".status, .choices").forEach(n => n.remove());
+  const list = el("div", "scores");
+  for (const s of scores) {
+    const item = el("div", "score");
+    const head = el("div", "score-head");
+    head.append(el("span", "score-label", s.label), el("span", "score-value", `${s.value} %`));
+    const bar = el("div", "bar"), fill = el("div", "fill");
+    fill.style.width = `${s.value}%`; bar.append(fill);
+    item.append(head, bar, el("div", "score-detail", s.detail));
+    list.append(item);
+  }
+  screenEl.append(list, el("div", "text score-end", "Vous pouvez fermer cette page."));
+}
+
+// ---------------------------------------------------------------------------
 // Déroulement
 // ---------------------------------------------------------------------------
 async function askParticipantId() {
@@ -259,7 +310,7 @@ async function main() {
   await runPairPhase("exp2_discrimination", "Expérience 2", shuffle(e2).slice(0, N_EXP2).map(t => ({...t,f1:window.contFreqs[t.i1-1],f2:window.contFreqs[t.i2-1],stim1:t.i1,stim2:t.i2})), tone2Dur, 3000);
 
   const ids = shuffle(Array.from({length:9},(_,i)=>i+1).flatMap(i=>Array(10).fill(i))).slice(0, N_IDENT);
-  await instruction("Identification des notes", `Vous allez entendre une seule note.\nEst-ce un « ${lowLabel} » ou un « ${highLabel} » ?\n\nRépondez avec votre première impression.`);
+  await instruction("Identification des notes", `Vous allez entendre une seule note.\nEst-ce un « ${lowLabel} » ou un « ${highLabel} » ?\n\nCertains sons se situent entre ces deux notes : choisissez celle qui vous semble la plus proche.\nRépondez avec votre première impression.`);
   for (let i=0;i<ids.length;i++) {
     const idx = ids[i], r = await singleTrial(window.contFreqs[idx-1], 5000, { label: "Identification", i: i + 1, n: ids.length });
     logRow({phase:"exp2_identification",trial:i+1,stim1:idx,f1:window.contFreqs[idx-1],response_key:r.key||"none",response:r.key===lowKey?lowLabel:r.key===highKey?highLabel:"aucune_reponse",rt_ms:r.rt,correct:-1,rating_1to5:-1});
@@ -272,6 +323,8 @@ async function main() {
     const r = await distanceTrial(e3[i].f1, e3[i].f2, { label: "Expérience 3", i: i + 1, n: e3.length });
     logRow({phase:"exp3_distance",trial:i+1,f1:e3[i].f1,f2:e3[i].f2,semitones:e3[i].semis,pair_type:e3[i].dir,response_key:r.key,response:r.key,rt_ms:r.rt,correct:-1,rating_1to5:RATINGS.findIndex(x => x[0] === r.key)+1});
   }
+  const scores = computeScores();
+  logRow({ phase: "scores", trial: 0, scores: Object.fromEntries(scores.map(s => [s.id, s.value])) });
   logRow({ phase: "fin", trial: 0 });
 
   view({ title: "Envoi des réponses…", text: "Merci de ne pas fermer la page." });
@@ -279,7 +332,7 @@ async function main() {
     await view({ title: "Envoi impossible", text: "Vos réponses n'ont pas pu être envoyées. Vérifiez votre connexion Internet puis réessayez.\nNe fermez pas la page.",
       options: [{ key: "ENTER", label: "Réessayer" }] }).wait(0, false);
   }
-  view({ title: "Merci pour votre participation !", text: "Vos réponses ont été enregistrées. Vous pouvez fermer cette page." });
+  showResults(scores);
 }
 
 view({ title: "Bienvenue", text: "Cette expérience utilise le son. Utilisez un casque ou des écouteurs.",
